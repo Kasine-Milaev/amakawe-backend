@@ -326,5 +326,10 @@ app.get('/api/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({ message: 'Amakawe Backend API is running' })
 })
+console.log('=== ENV CHECK ===')
+console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? '✅ Set' : '❌ NOT SET')
+console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? '✅ Set' : '❌ NOT SET')
+console.log('FRONTEND_URL:', process.env.FRONTEND_URL)
+console.log('=================')
 
 module.exports = app
