@@ -1,9 +1,8 @@
 const express = require('express')
 const cors = require('cors')
 const crypto = require('crypto')
-const axios = require('axios')
 const jwt = require('jsonwebtoken')
-const nodemailer = require('nodemailer')
+const { Resend } = require('resend')
 
 const app = express()
 
@@ -15,17 +14,10 @@ app.use(express.json())
 
 const BOT_TOKEN = process.env.BOT_TOKEN
 const JWT_SECRET = process.env.JWT_SECRET || 'amakawe-secret-key-change-me'
+const resend = new Resend(process.env.RESEND_API_KEY)
 
 const usersDB = new Map()
 const verificationCodes = new Map()
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD
-  }
-})
 
 const validateTelegramData = (data) => {
   const { hash, ...userData } = data
@@ -51,32 +43,35 @@ const generateVerificationCode = () => {
 }
 
 const sendVerificationEmail = async (email, code) => {
-  console.log('Sending email to:', email)
-  
-  const mailOptions = {
-    from: process.env.GMAIL_USER,
-    to: email,
-    subject: 'Код подтверждения Amakawe',
-    html: `
-      <div style="font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5;">
-        <div style="max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px;">
-          <h2 style="color: #667eea; margin-top: 0;">Amakawe</h2>
-          <p>Привет!</p>
-          <p>Ваш код подтверждения:</p>
-          <div style="background: #667eea; color: white; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; border-radius: 8px; margin: 20px 0; letter-spacing: 5px;">
-            ${code}
-          </div>
-          <p>Код действителен 10 минут.</p>
-          <p style="color: #718096; font-size: 14px;">Если вы не запрашивали этот код, просто проигнорируйте письмо.</p>
-          <p style="color: #718096; font-size: 14px; margin-top: 30px;">Команда Amakawe</p>
-        </div>
-      </div>
-    `
-  }
-  
   try {
-    await transporter.sendMail(mailOptions)
-    console.log('Email sent successfully to:', email)
+    const { data, error } = await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL || 'Amakawe <onboarding@resend.dev>',
+      to: email,
+      subject: 'Код подтверждения Amakawe',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5;">
+          <div style="max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <h2 style="color: #667eea; margin-top: 0;">Amakawe</h2>
+            <p style="color: #333; font-size: 16px;">Привет!</p>
+            <p style="color: #333; font-size: 16px;">Ваш код подтверждения:</p>
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; font-size: 28px; font-weight: bold; border-radius: 8px; margin: 20px 0; letter-spacing: 5px;">
+              ${code}
+            </div>
+            <p style="color: #718096; font-size: 14px;">Код действителен 10 минут.</p>
+            <p style="color: #718096; font-size: 14px;">Если вы не запрашивали этот код, просто проигнорируйте письмо.</p>
+            <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 30px 0;">
+            <p style="color: #718096; font-size: 14px; margin: 0;">Команда Amakawe</p>
+          </div>
+        </div>
+      `
+    })
+
+    if (error) {
+      console.error('Resend error:', error)
+      return false
+    }
+
+    console.log('Email sent successfully:', data.id)
     return true
   } catch (error) {
     console.error('Email sending failed:', error.message)
