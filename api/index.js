@@ -3,6 +3,7 @@ const cors = require('cors')
 const crypto = require('crypto')
 const axios = require('axios')
 const jwt = require('jsonwebtoken')
+const nodemailer = require('nodemailer')
 
 const app = express()
 
@@ -17,6 +18,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'amakawe-secret-key-change-me'
 
 const usersDB = new Map()
 const verificationCodes = new Map()
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD
+  }
+})
 
 const validateTelegramData = (data) => {
   const { hash, ...userData } = data
@@ -42,38 +51,35 @@ const generateVerificationCode = () => {
 }
 
 const sendVerificationEmail = async (email, code) => {
-  console.log(`Email: ${email}`)
-  console.log(`Code: ${code}`)
+  console.log('Sending email to:', email)
   
-  if (!process.env.EMAILJS_SERVICE_ID || !process.env.EMAILJS_TEMPLATE_ID || !process.env.EMAILJS_PRIVATE_KEY) {
-    console.log('EmailJS variables not configured')
-    return true
+  const mailOptions = {
+    from: process.env.GMAIL_USER,
+    to: email,
+    subject: 'Код подтверждения Amakawe',
+    html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5;">
+        <div style="max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px;">
+          <h2 style="color: #667eea; margin-top: 0;">Amakawe</h2>
+          <p>Привет!</p>
+          <p>Ваш код подтверждения:</p>
+          <div style="background: #667eea; color: white; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; border-radius: 8px; margin: 20px 0; letter-spacing: 5px;">
+            ${code}
+          </div>
+          <p>Код действителен 10 минут.</p>
+          <p style="color: #718096; font-size: 14px;">Если вы не запрашивали этот код, просто проигнорируйте письмо.</p>
+          <p style="color: #718096; font-size: 14px; margin-top: 30px;">Команда Amakawe</p>
+        </div>
+      </div>
+    `
   }
   
   try {
-    const response = await axios.post(
-      'https://api.emailjs.com/api/v1.0/email/send',
-      {
-        service_id: process.env.EMAILJS_SERVICE_ID,
-        template_id: process.env.EMAILJS_TEMPLATE_ID,
-        user_id: process.env.EMAILJS_PRIVATE_KEY,
-        template_params: {
-          email: email,
-          verification_code: code
-        }
-      },
-      {
-        headers: { 
-          'Content-Type': 'application/json',
-          'Origin': 'https://localhost'
-        }
-      }
-    )
-    
-    console.log('Email sent successfully:', response.status)
+    await transporter.sendMail(mailOptions)
+    console.log('Email sent successfully to:', email)
     return true
   } catch (error) {
-    console.error('EmailJS Error:', error.response?.status, error.response?.data)
+    console.error('Email sending failed:', error.message)
     return false
   }
 }
@@ -152,14 +158,13 @@ app.post('/api/auth/email/request-code', async (req, res) => {
     
     const sent = await sendVerificationEmail(email, code)
     
-    if (!sent && !process.env.EMAILJS_SERVICE_ID) {
-      console.log('EmailJS not configured, code logged to console')
+    if (!sent) {
+      return res.status(500).json({ error: 'Failed to send verification code' })
     }
     
     res.json({
       success: true,
-      message: 'Verification code sent',
-      code: process.env.NODE_ENV === 'development' ? code : undefined
+      message: 'Verification code sent'
     })
   } catch (error) {
     console.error('Request code error:', error)
