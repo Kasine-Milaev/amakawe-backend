@@ -50,7 +50,7 @@ const sendVerificationEmail = async (email, code) => {
       template_id: process.env.EMAILJS_TEMPLATE_ID,
       user_id: process.env.EMAILJS_USER_ID,
       template_params: {
-        to_email: email,
+        email: email,
         verification_code: code
       }
     }, {
