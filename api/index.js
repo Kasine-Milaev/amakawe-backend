@@ -44,12 +44,9 @@ const generateVerificationCode = () => {
 const sendVerificationEmail = async (email, code) => {
   console.log(`Email: ${email}`)
   console.log(`Code: ${code}`)
-  console.log(`Service ID: ${process.env.EMAILJS_SERVICE_ID}`)
-  console.log(`Template ID: ${process.env.EMAILJS_TEMPLATE_ID}`)
-  console.log(`User ID: ${process.env.EMAILJS_USER_ID ? 'Set' : 'NOT SET'}`)
   
-  if (!process.env.EMAILJS_SERVICE_ID || !process.env.EMAILJS_TEMPLATE_ID || !process.env.EMAILJS_USER_ID) {
-    console.log('EmailJS variables not configured, code logged above')
+  if (!process.env.EMAILJS_SERVICE_ID || !process.env.EMAILJS_TEMPLATE_ID || !process.env.EMAILJS_PRIVATE_KEY) {
+    console.log('EmailJS variables not configured')
     return true
   }
   
@@ -59,7 +56,7 @@ const sendVerificationEmail = async (email, code) => {
       {
         service_id: process.env.EMAILJS_SERVICE_ID,
         template_id: process.env.EMAILJS_TEMPLATE_ID,
-        user_id: process.env.EMAILJS_USER_ID,
+        user_id: process.env.EMAILJS_PRIVATE_KEY,
         template_params: {
           email: email,
           verification_code: code
@@ -67,7 +64,8 @@ const sendVerificationEmail = async (email, code) => {
       },
       {
         headers: { 
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Origin': 'https://localhost'
         }
       }
     )
@@ -76,12 +74,6 @@ const sendVerificationEmail = async (email, code) => {
     return true
   } catch (error) {
     console.error('EmailJS Error:', error.response?.status, error.response?.data)
-    console.error('Full error:', error.message)
-    
-    if (error.response?.status === 403) {
-      console.error('403 Forbidden - check Service ID, Template ID, User ID')
-    }
-    
     return false
   }
 }
