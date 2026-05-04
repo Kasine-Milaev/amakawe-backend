@@ -42,23 +42,46 @@ const generateVerificationCode = () => {
 }
 
 const sendVerificationEmail = async (email, code) => {
-  console.log(`📧 Verification code for ${email}: ${code}`)
+  console.log(`Email: ${email}`)
+  console.log(`Code: ${code}`)
+  console.log(`Service ID: ${process.env.EMAILJS_SERVICE_ID}`)
+  console.log(`Template ID: ${process.env.EMAILJS_TEMPLATE_ID}`)
+  console.log(`User ID: ${process.env.EMAILJS_USER_ID ? 'Set' : 'NOT SET'}`)
+  
+  if (!process.env.EMAILJS_SERVICE_ID || !process.env.EMAILJS_TEMPLATE_ID || !process.env.EMAILJS_USER_ID) {
+    console.log('EmailJS variables not configured, code logged above')
+    return true
+  }
   
   try {
-    await axios.post('https://api.emailjs.com/api/v1.0/email/send', {
-      service_id: process.env.EMAILJS_SERVICE_ID,
-      template_id: process.env.EMAILJS_TEMPLATE_ID,
-      user_id: process.env.EMAILJS_USER_ID,
-      template_params: {
-        email: email,
-        verification_code: code
+    const response = await axios.post(
+      'https://api.emailjs.com/api/v1.0/email/send',
+      {
+        service_id: process.env.EMAILJS_SERVICE_ID,
+        template_id: process.env.EMAILJS_TEMPLATE_ID,
+        user_id: process.env.EMAILJS_USER_ID,
+        template_params: {
+          email: email,
+          verification_code: code
+        }
+      },
+      {
+        headers: { 
+          'Content-Type': 'application/json'
+        }
       }
-    }, {
-      headers: { 'Content-Type': 'application/json' }
-    })
+    )
+    
+    console.log('Email sent successfully:', response.status)
     return true
   } catch (error) {
-    console.error('Email sending failed:', error.message)
+    console.error('EmailJS Error:', error.response?.status, error.response?.data)
+    console.error('Full error:', error.message)
+    
+    if (error.response?.status === 403) {
+      console.error('403 Forbidden - check Service ID, Template ID, User ID')
+    }
+    
     return false
   }
 }
@@ -138,7 +161,7 @@ app.post('/api/auth/email/request-code', async (req, res) => {
     const sent = await sendVerificationEmail(email, code)
     
     if (!sent && !process.env.EMAILJS_SERVICE_ID) {
-      console.log('⚠️ EmailJS not configured, code logged to console')
+      console.log('EmailJS not configured, code logged to console')
     }
     
     res.json({
