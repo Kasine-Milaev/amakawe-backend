@@ -17,7 +17,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'amakawe-secret-key-change-me'
 const resend = new Resend(process.env.RESEND_API_KEY)
 
 const usersDB = new Map()
-const verificationCodes = new Map()
 
 const validateTelegramData = (data) => {
   const { hash, ...userData } = data
@@ -143,13 +142,12 @@ app.post('/api/auth/email/request-code', async (req, res) => {
     }
     
     const code = generateVerificationCode()
-    const expiresAt = Date.now() + 10 * 60 * 1000
     
-    verificationCodes.set(email, {
-      code,
-      expiresAt,
-      attempts: 0
-    })
+    const verificationToken = jwt.sign(
+      { email, code },
+      JWT_SECRET,
+      { expiresIn: '10m' }
+    )
     
     const sent = await sendVerificationEmail(email, code)
     
@@ -159,7 +157,8 @@ app.post('/api/auth/email/request-code', async (req, res) => {
     
     res.json({
       success: true,
-      message: 'Verification code sent'
+      message: 'Verification code sent',
+      verificationToken
     })
   } catch (error) {
     console.error('Request code error:', error)
@@ -169,30 +168,26 @@ app.post('/api/auth/email/request-code', async (req, res) => {
 
 app.post('/api/auth/email/verify-code', async (req, res) => {
   try {
-    const { email, code } = req.body
+    const { email, code, verificationToken } = req.body
     
-    const verification = verificationCodes.get(email)
-    
-    if (!verification) {
-      return res.status(400).json({ error: 'Code not found or expired' })
+    if (!verificationToken) {
+      return res.status(400).json({ error: 'Verification token required' })
     }
     
-    if (Date.now() > verification.expiresAt) {
-      verificationCodes.delete(email)
-      return res.status(400).json({ error: 'Code expired' })
+    let decoded
+    try {
+      decoded = jwt.verify(verificationToken, JWT_SECRET)
+    } catch (err) {
+      return res.status(400).json({ error: 'Code expired or invalid' })
     }
     
-    if (verification.attempts >= 3) {
-      verificationCodes.delete(email)
-      return res.status(400).json({ error: 'Too many attempts' })
-    }
-    
-    if (verification.code !== code) {
-      verification.attempts += 1
+    if (decoded.code !== code) {
       return res.status(400).json({ error: 'Invalid code' })
     }
     
-    verificationCodes.delete(email)
+    if (decoded.email !== email) {
+      return res.status(400).json({ error: 'Email mismatch' })
+    }
     
     let user = usersDB.get(`email_${email}`)
     
