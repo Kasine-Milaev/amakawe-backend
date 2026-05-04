@@ -16,6 +16,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN
 const JWT_SECRET = process.env.JWT_SECRET || 'amakawe-secret-key-change-me'
 
 const usersDB = new Map()
+const verificationCodes = new Map()
 
 const validateTelegramData = (data) => {
   const { hash, ...userData } = data
@@ -34,6 +35,32 @@ const generateToken = (user) => {
     JWT_SECRET,
     { expiresIn: '30d' }
   )
+}
+
+const generateVerificationCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
+const sendVerificationEmail = async (email, code) => {
+  console.log(`📧 Verification code for ${email}: ${code}`)
+  
+  try {
+    await axios.post('https://api.emailjs.com/api/v1.0/email/send', {
+      service_id: process.env.EMAILJS_SERVICE_ID,
+      template_id: process.env.EMAILJS_TEMPLATE_ID,
+      user_id: process.env.EMAILJS_USER_ID,
+      template_params: {
+        to_email: email,
+        verification_code: code
+      }
+    }, {
+      headers: { 'Content-Type': 'application/json' }
+    })
+    return true
+  } catch (error) {
+    console.error('Email sending failed:', error.message)
+    return false
+  }
 }
 
 app.post('/api/auth/telegram', async (req, res) => {
@@ -63,14 +90,6 @@ app.post('/api/auth/telegram', async (req, res) => {
         history: []
       }
       usersDB.set(userId, user)
-      try {
-        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-          chat_id: userId,
-          text: `👋 Привет, ${user.first_name}!\n\nДобро пожаловать в Amakawe! 🎌`
-        })
-      } catch (err) {
-        console.error('Failed to send welcome message:', err.message)
-      }
     } else {
       user.last_login = new Date().toISOString()
       user.username = telegramData.username || user.username
@@ -99,149 +118,193 @@ app.post('/api/auth/telegram', async (req, res) => {
   }
 })
 
-app.get('/api/auth/google', (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'https://amakawe.ru'
-  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-    `client_id=${process.env.GOOGLE_CLIENT_ID}&` +
-    `redirect_uri=${frontendUrl}/auth/callback&` +
-    `response_type=code&` +
-    `scope=profile email&` +
-    `access_type=offline`
-  res.json({ authUrl: googleAuthUrl })
-})
-
-app.post('/api/auth/google/callback', async (req, res) => {
+app.post('/api/auth/email/request-code', async (req, res) => {
   try {
-    const { code } = req.body
-    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
-      code,
-      client_id: process.env.GOOGLE_CLIENT_ID,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      redirect_uri: `${process.env.FRONTEND_URL}/auth/callback`,
-      grant_type: 'authorization_code'
-    })
-    const userRes = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: { Authorization: `Bearer ${tokenRes.data.access_token}` }
-    })
-    const googleUser = userRes.data
-    const userId = `google_${googleUser.id}`
-    let user = usersDB.get(userId)
-    if (!user) {
-      user = {
-        id: userId,
-        provider: 'google',
-        email: googleUser.email,
-        username: googleUser.email.split('@')[0],
-        first_name: googleUser.given_name || '',
-        last_name: googleUser.family_name || '',
-        photo_url: googleUser.picture || null,
-        language_code: 'ru',
-        is_premium: false,
-        created_at: new Date().toISOString(),
-        last_login: new Date().toISOString(),
-        favorites: [],
-        history: []
-      }
-      usersDB.set(userId, user)
-    } else {
-      user.last_login = new Date().toISOString()
-      user.photo_url = googleUser.picture || user.photo_url
-      usersDB.set(userId, user)
+    const { email } = req.body
+    
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Invalid email' })
     }
-    const token = generateToken(user)
+    
+    const code = generateVerificationCode()
+    const expiresAt = Date.now() + 10 * 60 * 1000
+    
+    verificationCodes.set(email, {
+      code,
+      expiresAt,
+      attempts: 0
+    })
+    
+    const sent = await sendVerificationEmail(email, code)
+    
+    if (!sent && !process.env.EMAILJS_SERVICE_ID) {
+      console.log('⚠️ EmailJS not configured, code logged to console')
+    }
+    
     res.json({
       success: true,
-      token,
-      user: {
-        id: user.id,
-        provider: user.provider,
-        username: user.username,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        photo_url: user.photo_url,
-        email: user.email,
-        favorites: user.favorites
-      }
+      message: 'Verification code sent',
+      code: process.env.NODE_ENV === 'development' ? code : undefined
     })
   } catch (error) {
-    console.error('Google auth error:', error.message)
-    res.status(500).json({ error: 'Google authentication failed' })
+    console.error('Request code error:', error)
+    res.status(500).json({ error: 'Failed to send verification code' })
   }
 })
 
-app.get('/api/auth/vk', (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'https://amakawe.ru'
-  const vkAuthUrl = `https://oauth.vk.com/authorize?` +
-    `client_id=${process.env.VK_CLIENT_ID}&` +
-    `redirect_uri=${frontendUrl}/auth/callback&` +
-    `response_type=code&` +
-    `scope=email&` +
-    `v=5.131`
-  res.json({ authUrl: vkAuthUrl })
+app.post('/api/auth/email/verify-code', async (req, res) => {
+  try {
+    const { email, code } = req.body
+    
+    const verification = verificationCodes.get(email)
+    
+    if (!verification) {
+      return res.status(400).json({ error: 'Code not found or expired' })
+    }
+    
+    if (Date.now() > verification.expiresAt) {
+      verificationCodes.delete(email)
+      return res.status(400).json({ error: 'Code expired' })
+    }
+    
+    if (verification.attempts >= 3) {
+      verificationCodes.delete(email)
+      return res.status(400).json({ error: 'Too many attempts' })
+    }
+    
+    if (verification.code !== code) {
+      verification.attempts += 1
+      return res.status(400).json({ error: 'Invalid code' })
+    }
+    
+    verificationCodes.delete(email)
+    
+    let user = usersDB.get(`email_${email}`)
+    
+    if (!user) {
+      res.json({
+        success: true,
+        verified: true,
+        needsRegistration: true,
+        email
+      })
+    } else {
+      const token = generateToken(user)
+      res.json({
+        success: true,
+        verified: true,
+        needsRegistration: false,
+        token,
+        user: {
+          id: user.id,
+          provider: user.provider,
+          email: user.email,
+          username: user.username,
+          favorites: user.favorites
+        }
+      })
+    }
+  } catch (error) {
+    console.error('Verify code error:', error)
+    res.status(500).json({ error: 'Verification failed' })
+  }
 })
 
-app.post('/api/auth/vk/callback', async (req, res) => {
+app.post('/api/auth/email/register', async (req, res) => {
   try {
-    const { code } = req.body
-    const tokenRes = await axios.post('https://oauth.vk.com/access_token', {
-      client_id: process.env.VK_CLIENT_ID,
-      client_secret: process.env.VK_CLIENT_SECRET,
-      redirect_uri: `${process.env.FRONTEND_URL}/auth/callback`,
-      code,
-      grant_type: 'authorization_code'
-    })
-    const accessToken = tokenRes.data.access_token
-    const userId = tokenRes.data.user_id
-    const userRes = await axios.get('https://api.vk.com/method/users.get', {
-      params: {
-        user_ids: userId,
-        fields: 'photo_200,first_name,last_name',
-        access_token: accessToken,
-        v: '5.131'
-      }
-    })
-    const vkUser = userRes.data.response[0]
-    const dbUserId = `vk_${userId}`
-    let user = usersDB.get(dbUserId)
-    if (!user) {
-      user = {
-        id: dbUserId,
-        provider: 'vk',
-        vk_id: userId,
-        username: `vk${userId}`,
-        first_name: vkUser.first_name || '',
-        last_name: vkUser.last_name || '',
-        photo_url: vkUser.photo_200 || null,
-        language_code: 'ru',
-        is_premium: false,
-        created_at: new Date().toISOString(),
-        last_login: new Date().toISOString(),
-        favorites: [],
-        history: []
-      }
-      usersDB.set(dbUserId, user)
-    } else {
-      user.last_login = new Date().toISOString()
-      user.photo_url = vkUser.photo_200 || user.photo_url
-      usersDB.set(dbUserId, user)
+    const { email, password, username } = req.body
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' })
     }
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' })
+    }
+    
+    const userId = `email_${email}`
+    
+    let user = usersDB.get(userId)
+    
+    if (user && user.passwordHash) {
+      return res.status(400).json({ error: 'User already exists' })
+    }
+    
+    const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
+    
+    user = {
+      id: userId,
+      provider: 'email',
+      email,
+      username: username || email.split('@')[0],
+      passwordHash,
+      created_at: new Date().toISOString(),
+      last_login: new Date().toISOString(),
+      favorites: [],
+      history: []
+    }
+    
+    usersDB.set(userId, user)
+    
     const token = generateToken(user)
+    
     res.json({
       success: true,
       token,
       user: {
         id: user.id,
         provider: user.provider,
+        email: user.email,
         username: user.username,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        photo_url: user.photo_url,
         favorites: user.favorites
       }
     })
   } catch (error) {
-    console.error('VK auth error:', error.message)
-    res.status(500).json({ error: 'VK authentication failed' })
+    console.error('Register error:', error)
+    res.status(500).json({ error: 'Registration failed' })
+  }
+})
+
+app.post('/api/auth/email/login', async (req, res) => {
+  try {
+    const { email, password } = req.body
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' })
+    }
+    
+    const userId = `email_${email}`
+    const user = usersDB.get(userId)
+    
+    if (!user || !user.passwordHash) {
+      return res.status(401).json({ error: 'Invalid credentials' })
+    }
+    
+    const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
+    
+    if (user.passwordHash !== passwordHash) {
+      return res.status(401).json({ error: 'Invalid credentials' })
+    }
+    
+    user.last_login = new Date().toISOString()
+    usersDB.set(userId, user)
+    
+    const token = generateToken(user)
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        provider: user.provider,
+        email: user.email,
+        username: user.username,
+        favorites: user.favorites
+      }
+    })
+  } catch (error) {
+    console.error('Login error:', error)
+    res.status(500).json({ error: 'Login failed' })
   }
 })
 
@@ -262,10 +325,10 @@ app.get('/api/auth/me', (req, res) => {
         id: user.id,
         provider: user.provider,
         username: user.username,
+        email: user.email,
         first_name: user.first_name,
         last_name: user.last_name,
         photo_url: user.photo_url,
-        email: user.email,
         favorites: user.favorites,
         history: user.history
       }
@@ -273,46 +336,6 @@ app.get('/api/auth/me', (req, res) => {
   } catch (error) {
     res.status(401).json({ error: 'Invalid token' })
   }
-})
-
-app.get('/api/user/:id', (req, res) => {
-  const user = usersDB.get(req.params.id)
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' })
-  }
-  res.json({
-    id: user.id,
-    username: user.username,
-    first_name: user.first_name,
-    last_name: user.last_name,
-    photo_url: user.photo_url,
-    is_premium: user.is_premium,
-    favorites: user.favorites,
-    history: user.history
-  })
-})
-
-app.post('/api/user/:id/favorites', (req, res) => {
-  const user = usersDB.get(req.params.id)
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' })
-  }
-  const { animeId, title } = req.body
-  if (!user.favorites.find(f => f.id === animeId)) {
-    user.favorites.push({ id: animeId, title, added_at: new Date().toISOString() })
-    usersDB.set(req.params.id, user)
-  }
-  res.json({ success: true, favorites: user.favorites })
-})
-
-app.delete('/api/user/:id/favorites/:animeId', (req, res) => {
-  const user = usersDB.get(req.params.id)
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' })
-  }
-  user.favorites = user.favorites.filter(f => f.id !== req.params.animeId)
-  usersDB.set(req.params.id, user)
-  res.json({ success: true, favorites: user.favorites })
 })
 
 app.get('/api/health', (req, res) => {
@@ -326,10 +349,5 @@ app.get('/api/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({ message: 'Amakawe Backend API is running' })
 })
-console.log('=== ENV CHECK ===')
-console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? '✅ Set' : '❌ NOT SET')
-console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? '✅ Set' : '❌ NOT SET')
-console.log('FRONTEND_URL:', process.env.FRONTEND_URL)
-console.log('=================')
 
 module.exports = app
