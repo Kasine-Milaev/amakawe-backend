@@ -3,6 +3,7 @@ const cors = require('cors')
 const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
 const { Resend } = require('resend')
+const { pool, createTables } = require('./db')
 
 const app = express()
 
@@ -14,9 +15,12 @@ app.use(express.json())
 
 const BOT_TOKEN = process.env.BOT_TOKEN
 const JWT_SECRET = process.env.JWT_SECRET || 'amakawe-secret-key-change-me'
+
 const resend = new Resend(process.env.RESEND_API_KEY)
 
-const usersDB = new Map()
+const verificationCodes = new Map()
+
+createTables()
 
 const validateTelegramData = (data) => {
   const { hash, ...userData } = data
@@ -87,30 +91,46 @@ app.post('/api/auth/telegram', async (req, res) => {
     if (!validateTelegramData(telegramData)) {
       return res.status(401).json({ error: 'Invalid Telegram data' })
     }
-    const userId = telegramData.id
-    let user = usersDB.get(userId)
+    
+    let result = await pool.query(
+      'SELECT * FROM users WHERE telegram_id = $1',
+      [telegramData.id.toString()]
+    )
+    
+    let user = result.rows[0]
+    
     if (!user) {
-      user = {
-        id: userId,
-        provider: 'telegram',
-        username: telegramData.username || null,
-        first_name: telegramData.first_name,
-        last_name: telegramData.last_name || null,
-        photo_url: telegramData.photo_url || null,
-        language_code: telegramData.language_code || 'ru',
-        is_premium: telegramData.is_premium || false,
-        created_at: new Date().toISOString(),
-        last_login: new Date().toISOString(),
-        favorites: [],
-        history: []
-      }
-      usersDB.set(userId, user)
+      result = await pool.query(
+        `INSERT INTO users (provider, telegram_id, username, first_name, last_name, photo_url, is_premium, last_login)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         RETURNING *`,
+        [
+          'telegram',
+          telegramData.id.toString(),
+          telegramData.username || null,
+          telegramData.first_name,
+          telegramData.last_name || null,
+          telegramData.photo_url || null,
+          telegramData.is_premium || false
+        ]
+      )
+      user = result.rows[0]
+      console.log('New Telegram user created:', user.id)
     } else {
-      user.last_login = new Date().toISOString()
-      user.username = telegramData.username || user.username
-      user.photo_url = telegramData.photo_url || user.photo_url
-      usersDB.set(userId, user)
+      await pool.query(
+        `UPDATE users SET 
+          username = $1, 
+          photo_url = $2, 
+          last_login = NOW() 
+         WHERE id = $3`,
+        [
+          telegramData.username || user.username,
+          telegramData.photo_url || user.photo_url,
+          user.id
+        ]
+      )
     }
+    
     const token = generateToken(user)
     res.json({
       success: true,
@@ -122,7 +142,11 @@ app.post('/api/auth/telegram', async (req, res) => {
         first_name: user.first_name,
         last_name: user.last_name,
         photo_url: user.photo_url,
-        is_premium: user.is_premium,
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
         favorites: user.favorites,
         history: user.history
       }
@@ -189,7 +213,12 @@ app.post('/api/auth/email/verify-code', async (req, res) => {
       return res.status(400).json({ error: 'Email mismatch' })
     }
     
-    let user = usersDB.get(`email_${email}`)
+    const result = await pool.query(
+      'SELECT * FROM users WHERE email = $1',
+      [email]
+    )
+    
+    const user = result.rows[0]
     
     if (!user) {
       res.json({
@@ -210,7 +239,13 @@ app.post('/api/auth/email/verify-code', async (req, res) => {
           provider: user.provider,
           email: user.email,
           username: user.username,
-          favorites: user.favorites
+          avatar: user.avatar,
+          banner: user.banner,
+          bio: user.bio,
+          rating: user.rating,
+          anime_count: user.anime_count,
+          favorites: user.favorites,
+          history: user.history
         }
       })
     }
@@ -232,29 +267,42 @@ app.post('/api/auth/email/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters' })
     }
     
-    const userId = `email_${email}`
+    const result = await pool.query(
+      'SELECT * FROM users WHERE email = $1',
+      [email]
+    )
     
-    let user = usersDB.get(userId)
+    let user = result.rows[0]
     
-    if (user && user.passwordHash) {
+    if (user && user.password_hash) {
       return res.status(400).json({ error: 'User already exists' })
     }
     
     const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
     
-    user = {
-      id: userId,
-      provider: 'email',
-      email,
-      username: username || email.split('@')[0],
-      passwordHash,
-      created_at: new Date().toISOString(),
-      last_login: new Date().toISOString(),
-      favorites: [],
-      history: []
+    if (!user) {
+      result = await pool.query(
+        `INSERT INTO users (provider, email, username, password_hash, last_login)
+         VALUES ($1, $2, $3, $4, NOW())
+         RETURNING *`,
+        [
+          'email',
+          email,
+          username || email.split('@')[0],
+          passwordHash
+        ]
+      )
+      user = result.rows[0]
+      console.log('New email user created:', user.id)
+    } else {
+      await pool.query(
+        `UPDATE users SET 
+          password_hash = $1, 
+          last_login = NOW() 
+         WHERE id = $2`,
+        [passwordHash, user.id]
+      )
     }
-    
-    usersDB.set(userId, user)
     
     const token = generateToken(user)
     
@@ -266,7 +314,13 @@ app.post('/api/auth/email/register', async (req, res) => {
         provider: user.provider,
         email: user.email,
         username: user.username,
-        favorites: user.favorites
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        favorites: user.favorites,
+        history: user.history
       }
     })
   } catch (error) {
@@ -283,21 +337,27 @@ app.post('/api/auth/email/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' })
     }
     
-    const userId = `email_${email}`
-    const user = usersDB.get(userId)
+    const result = await pool.query(
+      'SELECT * FROM users WHERE email = $1',
+      [email]
+    )
     
-    if (!user || !user.passwordHash) {
+    const user = result.rows[0]
+    
+    if (!user || !user.password_hash) {
       return res.status(401).json({ error: 'Invalid credentials' })
     }
     
     const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
     
-    if (user.passwordHash !== passwordHash) {
+    if (user.password_hash !== passwordHash) {
       return res.status(401).json({ error: 'Invalid credentials' })
     }
     
-    user.last_login = new Date().toISOString()
-    usersDB.set(userId, user)
+    await pool.query(
+      'UPDATE users SET last_login = NOW() WHERE id = $1',
+      [user.id]
+    )
     
     const token = generateToken(user)
     
@@ -309,7 +369,13 @@ app.post('/api/auth/email/login', async (req, res) => {
         provider: user.provider,
         email: user.email,
         username: user.username,
-        favorites: user.favorites
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        favorites: user.favorites,
+        history: user.history
       }
     })
   } catch (error) {
@@ -318,14 +384,18 @@ app.post('/api/auth/email/login', async (req, res) => {
   }
 })
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
     return res.status(401).json({ error: 'No token provided' })
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    const user = usersDB.get(decoded.id)
+    const result = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [decoded.id]
+    )
+    const user = result.rows[0]
     if (!user) {
       return res.status(404).json({ error: 'User not found' })
     }
@@ -339,8 +409,15 @@ app.get('/api/auth/me', (req, res) => {
         first_name: user.first_name,
         last_name: user.last_name,
         photo_url: user.photo_url,
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        comments_count: user.comments_count,
         favorites: user.favorites,
-        history: user.history
+        history: user.history,
+        anime_lists: user.anime_lists
       }
     })
   } catch (error) {
@@ -348,12 +425,21 @@ app.get('/api/auth/me', (req, res) => {
   }
 })
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    users: usersDB.size
-  })
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1')
+    res.json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      database: 'connected'
+    })
+  } catch (error) {
+    res.json({ 
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      database: 'disconnected'
+    })
+  }
 })
 
 app.get('/', (req, res) => {
