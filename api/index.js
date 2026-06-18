@@ -18,18 +18,22 @@ const JWT_SECRET = process.env.JWT_SECRET || 'amakawe-secret-key-change-me'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'Set' : 'NOT SET')
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? {
-    rejectUnauthorized: false
-  } : false
+  ssl: false
 })
 
 const verificationCodes = new Map()
 
 const createTables = async () => {
   try {
-    await pool.query(`
+    console.log('Trying to connect to database...')
+    const client = await pool.connect()
+    console.log('Database connected!')
+    
+    await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         provider VARCHAR(50) NOT NULL,
@@ -55,9 +59,12 @@ const createTables = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `)
+    
+    client.release()
     console.log('Database tables created')
   } catch (error) {
-    console.error('Error creating tables:', error.message)
+    console.error('❌ Database error:', error.message)
+    console.error('Full error:', error)
   }
 }
 
@@ -478,7 +485,8 @@ app.get('/api/health', async (req, res) => {
     res.json({ 
       status: 'error',
       timestamp: new Date().toISOString(),
-      database: 'disconnected'
+      database: 'disconnected',
+      error: error.message
     })
   }
 })
