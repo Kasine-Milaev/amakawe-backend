@@ -312,6 +312,8 @@ app.post('/api/auth/email/verify-code', async (req, res) => {
 })
 
 app.post('/api/auth/email/register', async (req, res) => {
+  console.log('Register request:', req.body)
+  
   try {
     const { email, password, username } = req.body
     
@@ -323,12 +325,12 @@ app.post('/api/auth/email/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters' })
     }
     
-    const result = await pool.query(
+    let queryResult = await pool.query(
       'SELECT * FROM users WHERE email = $1',
       [email]
     )
     
-    let user = result.rows[0]
+    let user = queryResult.rows[0]
     
     if (user && user.password_hash) {
       return res.status(400).json({ error: 'User already exists' })
@@ -337,7 +339,7 @@ app.post('/api/auth/email/register', async (req, res) => {
     const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
     
     if (!user) {
-      result = await pool.query(
+      queryResult = await pool.query(
         `INSERT INTO users (provider, email, username, password_hash, last_login)
          VALUES ($1, $2, $3, $4, NOW())
          RETURNING *`,
@@ -348,7 +350,7 @@ app.post('/api/auth/email/register', async (req, res) => {
           passwordHash
         ]
       )
-      user = result.rows[0]
+      user = queryResult.rows[0]
       console.log('New email user created:', user.id)
     } else {
       await pool.query(
