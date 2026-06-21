@@ -931,5 +931,187 @@ app.post('/api/auth/register', async (req, res) => {
   }
 })
 
+app.post('/api/profile/me/avatar/upload', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { avatar } = req.body
+    
+    if (!avatar) {
+      return res.status(400).json({ error: 'Avatar data required' })
+    }
+    
+    await pool.query(
+      'UPDATE users SET avatar = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [avatar, decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      avatar
+    })
+  } catch (error) {
+    console.error('Avatar update error:', error)
+    res.status(500).json({ error: 'Failed to update avatar' })
+  }
+})
+
+app.post('/api/profile/me/banner', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { banner } = req.body
+    
+    await pool.query(
+      'UPDATE users SET banner = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [banner, decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      banner
+    })
+  } catch (error) {
+    console.error('Banner update error:', error)
+    res.status(500).json({ error: 'Failed to update banner' })
+  }
+})
+
+app.put('/api/profile/me', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { username, bio } = req.body
+    
+    const updates = []
+    const values = []
+    let paramCount = 1
+    
+    if (username !== undefined) {
+      updates.push(`username = $${paramCount}`)
+      values.push(username)
+      paramCount++
+    }
+    if (bio !== undefined) {
+      updates.push(`bio = $${paramCount}`)
+      values.push(bio)
+      paramCount++
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' })
+    }
+    
+    updates.push(`updated_at = CURRENT_TIMESTAMP`)
+    values.push(decoded.id)
+    
+    const result = await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+      values
+    )
+    
+    const user = result.rows[0]
+    
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        bio: user.bio,
+        avatar: user.avatar,
+        banner: user.banner,
+        rating: user.rating,
+        anime_count: user.anime_count
+      }
+    })
+  } catch (error) {
+    console.error('Profile update error:', error)
+    res.status(500).json({ error: 'Failed to update profile' })
+  }
+})
+
+app.post('/api/anime/:id/activity', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { action } = req.body
+    const animeId = parseInt(req.params.id)
+    
+    if (!action) {
+      return res.status(400).json({ error: 'Action required' })
+    }
+    
+    let user = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
+    const currentUser = user.rows[0]
+    
+    let history = currentUser.history || []
+    let animeLists = currentUser.anime_lists || {}
+    
+    history.unshift({
+      animeId,
+      action,
+      viewedAt: new Date().toISOString()
+    })
+    
+    if (history.length > 50) {
+      history = history.slice(0, 50)
+    }
+    
+    if (!animeLists.watching) animeLists.watching = []
+    if (!animeLists.planned) animeLists.planned = []
+    if (!animeLists.completed) animeLists.completed = []
+    if (!animeLists.onHold) animeLists.onHold = []
+    if (!animeLists.dropped) animeLists.dropped = []
+    
+    const allLists = ['watching', 'planned', 'completed', 'onHold', 'dropped']
+    allLists.forEach(list => {
+      animeLists[list] = animeLists[list].filter(id => id !== animeId)
+    })
+    
+    const listMap = {
+      'watching': 'watching',
+      'completed': 'completed',
+      'planned': 'planned',
+      'dropped': 'dropped',
+      'on_hold': 'onHold'
+    }
+    
+    const targetList = listMap[action]
+    if (targetList && !animeLists[targetList].includes(animeId)) {
+      animeLists[targetList].push(animeId)
+    }
+    
+    await pool.query(
+      'UPDATE users SET history = $1, anime_lists = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+      [JSON.stringify(history), JSON.stringify(animeLists), decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      history,
+      animeLists
+    })
+  } catch (error) {
+    console.error('Activity error:', error)
+    res.status(500).json({ error: 'Failed to update activity' })
+  }
+})
+
 
 module.exports = app
