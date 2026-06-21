@@ -94,13 +94,10 @@ const generateVerificationCode = () => {
 }
 
 const sendVerificationEmail = async (email, code) => {
-  console.log('\n========================================')
-  console.log('📧 VERIFICATION CODE')
-  console.log('========================================')
-  console.log('Email:', email)
-  console.log('Code:', code)
-  console.log('========================================\n')
-
+  console.log('Attempting to send email to:', email)
+  console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? 'Set' : 'NOT SET')
+  console.log('RESEND_FROM_EMAIL:', process.env.RESEND_FROM_EMAIL)
+  
   try {
     const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || 'Amakawe <onboarding@resend.dev>',
@@ -125,16 +122,16 @@ const sendVerificationEmail = async (email, code) => {
     })
 
     if (error) {
-      console.log('⚠️ Resend error (free tier limitation):', error.message)
-      console.log('✅ Code logged above - user can use it for testing')
-      return true
+      console.error('Resend API Error:', error)
+      return false
     }
 
-    console.log('✅ Email sent successfully:', data.id)
+    console.log('Email sent successfully:', data.id)
     return true
   } catch (error) {
     console.error('Email sending failed:', error.message)
-    return true
+    console.error('Full error:', error)
+    return false
   }
 }
 
@@ -312,8 +309,6 @@ app.post('/api/auth/email/verify-code', async (req, res) => {
 })
 
 app.post('/api/auth/email/register', async (req, res) => {
-  console.log('Register request:', req.body)
-  
   try {
     const { email, password, username } = req.body
     
@@ -325,12 +320,12 @@ app.post('/api/auth/email/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters' })
     }
     
-    let queryResult = await pool.query(
+    const result = await pool.query(
       'SELECT * FROM users WHERE email = $1',
       [email]
     )
     
-    let user = queryResult.rows[0]
+    let user = result.rows[0]
     
     if (user && user.password_hash) {
       return res.status(400).json({ error: 'User already exists' })
@@ -339,7 +334,7 @@ app.post('/api/auth/email/register', async (req, res) => {
     const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
     
     if (!user) {
-      queryResult = await pool.query(
+      result = await pool.query(
         `INSERT INTO users (provider, email, username, password_hash, last_login)
          VALUES ($1, $2, $3, $4, NOW())
          RETURNING *`,
@@ -350,7 +345,7 @@ app.post('/api/auth/email/register', async (req, res) => {
           passwordHash
         ]
       )
-      user = queryResult.rows[0]
+      user = result.rows[0]
       console.log('New email user created:', user.id)
     } else {
       await pool.query(
@@ -815,6 +810,126 @@ app.post('/api/profile/me/banner', async (req, res) => {
   }
 })
 
+app.post('/api/auth/login', async (req, res) => {
+  console.log('Login request:', req.body)
+  
+  try {
+    const { username, password } = req.body
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' })
+    }
+    
+    const result = await pool.query(
+      'SELECT * FROM users WHERE username = $1 OR email = $1',
+      [username.toLowerCase()]
+    )
+    
+    const user = result.rows[0]
+    
+    if (!user || !user.password_hash) {
+      return res.status(401).json({ error: 'Invalid username or password' })
+    }
+    
+    const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
+    
+    if (user.password_hash !== passwordHash) {
+      return res.status(401).json({ error: 'Invalid username or password' })
+    }
+    
+    await pool.query(
+      'UPDATE users SET last_login = NOW() WHERE id = $1',
+      [user.id]
+    )
+    
+    const token = generateToken(user)
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        provider: user.provider,
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        favorites: user.favorites,
+        history: user.history
+      }
+    })
+  } catch (error) {
+    console.error('Login error:', error)
+    res.status(500).json({ error: 'Login failed' })
+  }
+})
+
+app.post('/api/auth/register', async (req, res) => {
+  console.log('Register request:', req.body)
+  
+  try {
+    const { username, password } = req.body
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' })
+    }
+    
+    if (username.length < 3) {
+      return res.status(400).json({ error: 'Username must be at least 3 characters' })
+    }
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' })
+    }
+    
+    const existingUser = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username.toLowerCase()]
+    )
+    
+    if (existingUser.rows[0]) {
+      return res.status(400).json({ error: 'Username already exists' })
+    }
+    
+    const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
+    
+    const result = await pool.query(
+      `INSERT INTO users (provider, username, password_hash, last_login)
+       VALUES ($1, $2, $3, NOW())
+       RETURNING *`,
+      ['username', username.toLowerCase(), passwordHash]
+    )
+    
+    const user = result.rows[0]
+    console.log('New user created:', user.id)
+    
+    const token = generateToken(user)
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        provider: user.provider,
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        favorites: user.favorites,
+        history: user.history
+      }
+    })
+  } catch (error) {
+    console.error('Register error:', error)
+    res.status(500).json({ error: 'Registration failed' })
+  }
+})
 
 
 module.exports = app
