@@ -621,47 +621,6 @@ app.get('/', (req, res) => {
   res.json({ message: 'Amakawe Backend API is running' })
 })
 
-app.get('/api/profile/:id', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM users WHERE id = $1',
-      [req.params.id]
-    )
-    
-    const user = result.rows[0]
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' })
-    }
-    
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        provider: user.provider,
-        username: user.username,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        photo_url: user.photo_url,
-        avatar: user.avatar,
-        banner: user.banner,
-        bio: user.bio,
-        rating: user.rating,
-        anime_count: user.anime_count,
-        comments_count: user.comments_count,
-        favorites: user.favorites,
-        history: user.history,
-        anime_lists: user.anime_lists,
-        created_at: user.created_at,
-        last_login: user.last_login
-      }
-    })
-  } catch (error) {
-    console.error('Profile error:', error)
-    res.status(500).json({ error: 'Failed to get profile' })
-  }
-})
-
 app.get('/api/profile/me', async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
@@ -702,6 +661,47 @@ app.get('/api/profile/me', async (req, res) => {
     })
   } catch (error) {
     console.error('Profile/me error:', error)
+    res.status(500).json({ error: 'Failed to get profile' })
+  }
+})
+
+app.get('/api/profile/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [req.params.id]
+    )
+    
+    const user = result.rows[0]
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+    
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        provider: user.provider,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        photo_url: user.photo_url,
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        comments_count: user.comments_count,
+        favorites: user.favorites,
+        history: user.history,
+        anime_lists: user.anime_lists,
+        created_at: user.created_at,
+        last_login: user.last_login
+      }
+    })
+  } catch (error) {
+    console.error('Profile error:', error)
     res.status(500).json({ error: 'Failed to get profile' })
   }
 })
