@@ -478,338 +478,6 @@ app.get('/api/auth/me', async (req, res) => {
   }
 })
 
-app.get('/api/health', async (req, res) => {
-  try {
-    await pool.query('SELECT 1')
-    res.json({ 
-      status: 'ok', 
-      timestamp: new Date().toISOString(),
-      database: 'connected'
-    })
-  } catch (error) {
-    res.json({ 
-      status: 'error',
-      timestamp: new Date().toISOString(),
-      database: 'disconnected',
-      error: error.message
-    })
-  }
-})
-
-app.get('/', (req, res) => {
-  res.json({ message: 'Amakawe Backend API is running' })
-})
-
-app.get('/api/profile/:id', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM users WHERE id = $1',
-      [req.params.id]
-    )
-    
-    const user = result.rows[0]
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' })
-    }
-    
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        provider: user.provider,
-        username: user.username,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        photo_url: user.photo_url,
-        avatar: user.avatar,
-        banner: user.banner,
-        bio: user.bio,
-        rating: user.rating,
-        anime_count: user.anime_count,
-        comments_count: user.comments_count,
-        favorites: user.favorites,
-        history: user.history,
-        anime_lists: user.anime_lists,
-        created_at: user.created_at,
-        last_login: user.last_login
-      }
-    })
-  } catch (error) {
-    console.error('Profile error:', error)
-    res.status(500).json({ error: 'Failed to get profile' })
-  }
-})
-
-app.get('/api/profile/me', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const result = await pool.query(
-      'SELECT * FROM users WHERE id = $1',
-      [decoded.id]
-    )
-    const user = result.rows[0]
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' })
-    }
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        provider: user.provider,
-        username: user.username,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        photo_url: user.photo_url,
-        avatar: user.avatar,
-        banner: user.banner,
-        bio: user.bio,
-        rating: user.rating,
-        anime_count: user.anime_count,
-        comments_count: user.comments_count,
-        favorites: user.favorites,
-        history: user.history,
-        anime_lists: user.anime_lists,
-        created_at: user.created_at,
-        last_login: user.last_login
-      }
-    })
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' })
-  }
-})
-
-app.put('/api/profile/me', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { username, bio, avatar, banner } = req.body
-    
-    const updates = []
-    const values = []
-    let paramCount = 1
-    
-    if (username !== undefined) {
-      updates.push(`username = $${paramCount}`)
-      values.push(username)
-      paramCount++
-    }
-    if (bio !== undefined) {
-      updates.push(`bio = $${paramCount}`)
-      values.push(bio)
-      paramCount++
-    }
-    if (avatar !== undefined) {
-      updates.push(`avatar = $${paramCount}`)
-      values.push(avatar)
-      paramCount++
-    }
-    if (banner !== undefined) {
-      updates.push(`banner = $${paramCount}`)
-      values.push(banner)
-      paramCount++
-    }
-    
-    if (updates.length === 0) {
-      return res.status(400).json({ error: 'No fields to update' })
-    }
-    
-    updates.push(`updated_at = CURRENT_TIMESTAMP`)
-    values.push(decoded.id)
-    
-    const result = await pool.query(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`,
-      values
-    )
-    
-    const user = result.rows[0]
-    
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        bio: user.bio,
-        avatar: user.avatar,
-        banner: user.banner,
-        rating: user.rating,
-        anime_count: user.anime_count
-      }
-    })
-  } catch (error) {
-    console.error('Update profile error:', error)
-    res.status(500).json({ error: 'Failed to update profile' })
-  }
-})
-
-app.post('/api/profile/me/activity', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { animeId, action } = req.body
-    
-    if (!animeId || !action) {
-      return res.status(400).json({ error: 'animeId and action required' })
-    }
-    
-    let user = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
-    const currentUser = user.rows[0]
-    
-    let history = currentUser.history || []
-    let animeLists = currentUser.anime_lists || {}
-    let animeCount = currentUser.anime_count || 0
-    
-    history.unshift({
-      animeId,
-      action,
-      viewedAt: new Date().toISOString()
-    })
-    
-    if (history.length > 50) {
-      history = history.slice(0, 50)
-    }
-    
-    if (action === 'watching' || action === 'completed' || action === 'planned' || action === 'dropped' || action === 'on_hold') {
-      if (!animeLists.watching) animeLists.watching = []
-      if (!animeLists.planned) animeLists.planned = []
-      if (!animeLists.completed) animeLists.completed = []
-      if (!animeLists.onHold) animeLists.onHold = []
-      if (!animeLists.dropped) animeLists.dropped = []
-      
-      const allLists = ['watching', 'planned', 'completed', 'onHold', 'dropped']
-      allLists.forEach(list => {
-        animeLists[list] = animeLists[list].filter(id => id !== animeId)
-      })
-      
-      const listMap = {
-        'watching': 'watching',
-        'completed': 'completed',
-        'planned': 'planned',
-        'dropped': 'dropped',
-        'on_hold': 'onHold'
-      }
-      
-      const targetList = listMap[action]
-      if (targetList && !animeLists[targetList].includes(animeId)) {
-        animeLists[targetList].push(animeId)
-      }
-      
-      if (action === 'completed') {
-        animeCount += 1
-      }
-    }
-    
-    await pool.query(
-      'UPDATE users SET history = $1, anime_lists = $2, anime_count = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4',
-      [JSON.stringify(history), JSON.stringify(animeLists), animeCount, decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      history,
-      animeLists,
-      animeCount
-    })
-  } catch (error) {
-    console.error('Activity error:', error)
-    res.status(500).json({ error: 'Failed to update activity' })
-  }
-})
-
-app.get('/api/profile/:id/activity', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT history, anime_lists, anime_count FROM users WHERE id = $1',
-      [req.params.id]
-    )
-    
-    const user = result.rows[0]
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' })
-    }
-    
-    res.json({
-      success: true,
-      activity: {
-        history: user.history || [],
-        animeLists: user.anime_lists || {},
-        animeCount: user.anime_count || 0
-      }
-    })
-  } catch (error) {
-    console.error('Activity error:', error)
-    res.status(500).json({ error: 'Failed to get activity' })
-  }
-})
-
-app.post('/api/profile/me/avatar', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { avatar } = req.body
-    
-    if (!avatar) {
-      return res.status(400).json({ error: 'Avatar URL required' })
-    }
-    
-    await pool.query(
-      'UPDATE users SET avatar = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [avatar, decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      avatar
-    })
-  } catch (error) {
-    console.error('Avatar error:', error)
-    res.status(500).json({ error: 'Failed to update avatar' })
-  }
-})
-
-app.post('/api/profile/me/banner', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { banner } = req.body
-    
-    if (!banner) {
-      return res.status(400).json({ error: 'Banner URL required' })
-    }
-    
-    await pool.query(
-      'UPDATE users SET banner = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [banner, decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      banner
-    })
-  } catch (error) {
-    console.error('Banner error:', error)
-    res.status(500).json({ error: 'Failed to update banner' })
-  }
-})
-
 app.post('/api/auth/login', async (req, res) => {
   console.log('Login request:', req.body)
   
@@ -931,217 +599,84 @@ app.post('/api/auth/register', async (req, res) => {
   }
 })
 
-app.post('/api/profile/me/avatar/upload', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
+app.get('/api/health', async (req, res) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { avatar } = req.body
-    
-    console.log('Uploading avatar for user:', decoded.id)
-    
-    if (!avatar) {
-      return res.status(400).json({ error: 'Avatar data required' })
-    }
-    
-    await pool.query(
-      'UPDATE users SET avatar = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [avatar, decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      avatar
+    await pool.query('SELECT 1')
+    res.json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      database: 'connected'
     })
   } catch (error) {
-    console.error('Avatar update error:', error)
-    res.status(500).json({ error: 'Failed to update avatar' })
+    res.json({ 
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: error.message
+    })
   }
 })
 
-app.post('/api/profile/me/banner', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { banner } = req.body
-    
-    await pool.query(
-      'UPDATE users SET banner = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [banner, decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      banner
-    })
-  } catch (error) {
-    console.error('Banner update error:', error)
-    res.status(500).json({ error: 'Failed to update banner' })
-  }
+app.get('/', (req, res) => {
+  res.json({ message: 'Amakawe Backend API is running' })
 })
 
-app.put('/api/profile/me', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
+app.get('/api/profile/:id', async (req, res) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { username, bio } = req.body
-    
-    const updates = []
-    const values = []
-    let paramCount = 1
-    
-    if (username !== undefined) {
-      updates.push(`username = $${paramCount}`)
-      values.push(username)
-      paramCount++
-    }
-    if (bio !== undefined) {
-      updates.push(`bio = $${paramCount}`)
-      values.push(bio)
-      paramCount++
-    }
-    
-    if (updates.length === 0) {
-      return res.status(400).json({ error: 'No fields to update' })
-    }
-    
-    updates.push(`updated_at = CURRENT_TIMESTAMP`)
-    values.push(decoded.id)
-    
-    const result = await pool.query(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`,
-      values
-    )
-    
-    const user = result.rows[0]
-    
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        bio: user.bio,
-        avatar: user.avatar,
-        banner: user.banner,
-        rating: user.rating,
-        anime_count: user.anime_count
-      }
-    })
-  } catch (error) {
-    console.error('Profile update error:', error)
-    res.status(500).json({ error: 'Failed to update profile' })
-  }
-})
-
-app.post('/api/anime/:id/activity', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { action } = req.body
-    const animeId = parseInt(req.params.id)
-    
-    if (!action) {
-      return res.status(400).json({ error: 'Action required' })
-    }
-    
-    let user = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
-    const currentUser = user.rows[0]
-    
-    let history = currentUser.history || []
-    let animeLists = currentUser.anime_lists || {}
-    
-    history.unshift({
-      animeId,
-      action,
-      viewedAt: new Date().toISOString()
-    })
-    
-    if (history.length > 50) {
-      history = history.slice(0, 50)
-    }
-    
-    if (!animeLists.watching) animeLists.watching = []
-    if (!animeLists.planned) animeLists.planned = []
-    if (!animeLists.completed) animeLists.completed = []
-    if (!animeLists.onHold) animeLists.onHold = []
-    if (!animeLists.dropped) animeLists.dropped = []
-    
-    const allLists = ['watching', 'planned', 'completed', 'onHold', 'dropped']
-    allLists.forEach(list => {
-      animeLists[list] = animeLists[list].filter(id => id !== animeId)
-    })
-    
-    const listMap = {
-      'watching': 'watching',
-      'completed': 'completed',
-      'planned': 'planned',
-      'dropped': 'dropped',
-      'on_hold': 'onHold'
-    }
-    
-    const targetList = listMap[action]
-    if (targetList && !animeLists[targetList].includes(animeId)) {
-      animeLists[targetList].push(animeId)
-    }
-    
-    await pool.query(
-      'UPDATE users SET history = $1, anime_lists = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-      [JSON.stringify(history), JSON.stringify(animeLists), decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      history,
-      animeLists
-    })
-  } catch (error) {
-    console.error('Activity error:', error)
-    res.status(500).json({ error: 'Failed to update activity' })
-  }
-})
-
-app.get('/api/profile/me', async (req, res) => {
-  console.log('📩 Profile/me request received')
-  
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  console.log('🔑 Token:', token ? 'Found' : 'NOT FOUND')
-  
-  if (!token) {
-    console.log('❌ No token provided')
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    console.log('✅ Token decoded, user ID:', decoded.id)
-    
     const result = await pool.query(
       'SELECT * FROM users WHERE id = $1',
-      [decoded.id]
+      [req.params.id]
     )
     
     const user = result.rows[0]
-    console.log('👤 User found:', user ? user.username : 'NOT FOUND')
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' })
     }
     
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        provider: user.provider,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        photo_url: user.photo_url,
+        avatar: user.avatar,
+        banner: user.banner,
+        bio: user.bio,
+        rating: user.rating,
+        anime_count: user.anime_count,
+        comments_count: user.comments_count,
+        favorites: user.favorites,
+        history: user.history,
+        anime_lists: user.anime_lists,
+        created_at: user.created_at,
+        last_login: user.last_login
+      }
+    })
+  } catch (error) {
+    console.error('Profile error:', error)
+    res.status(500).json({ error: 'Failed to get profile' })
+  }
+})
+
+app.get('/api/profile/me', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const result = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [decoded.id]
+    )
+    const user = result.rows[0]
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
     res.json({
       success: true,
       user: {
@@ -1166,29 +701,16 @@ app.get('/api/profile/me', async (req, res) => {
       }
     })
   } catch (error) {
-    console.error('❌ Profile/me error:', error.message)
-    console.error('Full error:', error)
-    res.status(500).json({ 
-      error: 'Failed to get profile',
-      details: error.message 
-    })
+    console.error('Profile/me error:', error)
+    res.status(500).json({ error: 'Failed to get profile' })
   }
 })
 
-app.get('/api/profile/me/activity', async (req, res) => {
-  console.log('📩 Activity request received')
-  
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
+app.get('/api/profile/:id/activity', async (req, res) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    
     const result = await pool.query(
       'SELECT history, anime_lists, anime_count FROM users WHERE id = $1',
-      [decoded.id]
+      [req.params.id]
     )
     
     const user = result.rows[0]
@@ -1211,9 +733,112 @@ app.get('/api/profile/me/activity', async (req, res) => {
   }
 })
 
+app.post('/api/profile/me/activity', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { animeId, action } = req.body
+    
+    if (!animeId || !action) {
+      return res.status(400).json({ error: 'animeId and action required' })
+    }
+    
+    let user = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
+    const currentUser = user.rows[0]
+    
+    let history = currentUser.history || []
+    let animeLists = currentUser.anime_lists || {}
+    let animeCount = currentUser.anime_count || 0
+    
+    history.unshift({
+      animeId,
+      action,
+      viewedAt: new Date().toISOString()
+    })
+    
+    if (history.length > 50) {
+      history = history.slice(0, 50)
+    }
+    
+    if (action === 'watching' || action === 'completed' || action === 'planned' || action === 'dropped' || action === 'on_hold') {
+      if (!animeLists.watching) animeLists.watching = []
+      if (!animeLists.planned) animeLists.planned = []
+      if (!animeLists.completed) animeLists.completed = []
+      if (!animeLists.onHold) animeLists.onHold = []
+      if (!animeLists.dropped) animeLists.dropped = []
+      
+      const allLists = ['watching', 'planned', 'completed', 'onHold', 'dropped']
+      allLists.forEach(list => {
+        animeLists[list] = animeLists[list].filter(id => id !== animeId)
+      })
+      
+      const listMap = {
+        'watching': 'watching',
+        'completed': 'completed',
+        'planned': 'planned',
+        'dropped': 'dropped',
+        'on_hold': 'onHold'
+      }
+      
+      const targetList = listMap[action]
+      if (targetList && !animeLists[targetList].includes(animeId)) {
+        animeLists[targetList].push(animeId)
+      }
+      
+      if (action === 'completed') {
+        animeCount += 1
+      }
+    }
+    
+    await pool.query(
+      'UPDATE users SET history = $1, anime_lists = $2, anime_count = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4',
+      [JSON.stringify(history), JSON.stringify(animeLists), animeCount, decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      history,
+      animeLists,
+      animeCount
+    })
+  } catch (error) {
+    console.error('Activity error:', error)
+    res.status(500).json({ error: 'Failed to update activity' })
+  }
+})
+
+app.post('/api/profile/me/avatar', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { avatar } = req.body
+    
+    if (!avatar) {
+      return res.status(400).json({ error: 'Avatar URL required' })
+    }
+    
+    await pool.query(
+      'UPDATE users SET avatar = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [avatar, decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      avatar
+    })
+  } catch (error) {
+    console.error('Avatar error:', error)
+    res.status(500).json({ error: 'Failed to update avatar' })
+  }
+})
+
 app.post('/api/profile/me/avatar/upload', async (req, res) => {
-  console.log('📩 Avatar upload request received')
-  
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
     return res.status(401).json({ error: 'No token provided' })
@@ -1244,9 +869,7 @@ app.post('/api/profile/me/avatar/upload', async (req, res) => {
   }
 })
 
-app.put('/api/profile/me', async (req, res) => {
-  console.log('📩 Profile update request received')
-  
+app.post('/api/profile/me/banner', async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
     return res.status(401).json({ error: 'No token provided' })
@@ -1254,7 +877,32 @@ app.put('/api/profile/me', async (req, res) => {
   
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    const { username, bio } = req.body
+    const { banner } = req.body
+    
+    await pool.query(
+      'UPDATE users SET banner = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [banner, decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      banner
+    })
+  } catch (error) {
+    console.error('Banner error:', error)
+    res.status(500).json({ error: 'Failed to update banner' })
+  }
+})
+
+app.put('/api/profile/me', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { username, bio, avatar, banner } = req.body
     
     const updates = []
     const values = []
@@ -1268,6 +916,16 @@ app.put('/api/profile/me', async (req, res) => {
     if (bio !== undefined) {
       updates.push(`bio = $${paramCount}`)
       values.push(bio)
+      paramCount++
+    }
+    if (avatar !== undefined) {
+      updates.push(`avatar = $${paramCount}`)
+      values.push(avatar)
+      paramCount++
+    }
+    if (banner !== undefined) {
+      updates.push(`banner = $${paramCount}`)
+      values.push(banner)
       paramCount++
     }
     
@@ -1303,82 +961,7 @@ app.put('/api/profile/me', async (req, res) => {
   }
 })
 
-app.post('/api/anime/:id/activity', async (req, res) => {
-  console.log('📩 Anime activity request received')
-  
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-  
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    const { action } = req.body
-    const animeId = parseInt(req.params.id)
-    
-    if (!action) {
-      return res.status(400).json({ error: 'Action required' })
-    }
-    
-    let user = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
-    const currentUser = user.rows[0]
-    
-    let history = currentUser.history || []
-    let animeLists = currentUser.anime_lists || {}
-    
-    history.unshift({
-      animeId,
-      action,
-      viewedAt: new Date().toISOString()
-    })
-    
-    if (history.length > 50) {
-      history = history.slice(0, 50)
-    }
-    
-    if (!animeLists.watching) animeLists.watching = []
-    if (!animeLists.planned) animeLists.planned = []
-    if (!animeLists.completed) animeLists.completed = []
-    if (!animeLists.onHold) animeLists.onHold = []
-    if (!animeLists.dropped) animeLists.dropped = []
-    
-    const allLists = ['watching', 'planned', 'completed', 'onHold', 'dropped']
-    allLists.forEach(list => {
-      animeLists[list] = animeLists[list].filter(id => id !== animeId)
-    })
-    
-    const listMap = {
-      'watching': 'watching',
-      'completed': 'completed',
-      'planned': 'planned',
-      'dropped': 'dropped',
-      'on_hold': 'onHold'
-    }
-    
-    const targetList = listMap[action]
-    if (targetList && !animeLists[targetList].includes(animeId)) {
-      animeLists[targetList].push(animeId)
-    }
-    
-    await pool.query(
-      'UPDATE users SET history = $1, anime_lists = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-      [JSON.stringify(history), JSON.stringify(animeLists), decoded.id]
-    )
-    
-    res.json({
-      success: true,
-      history,
-      animeLists
-    })
-  } catch (error) {
-    console.error('Activity error:', error)
-    res.status(500).json({ error: 'Failed to update activity' })
-  }
-})
-
 app.post('/api/profile/me/favorites', async (req, res) => {
-  console.log('📩 Favorites request received')
-  
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
     return res.status(401).json({ error: 'No token provided' })
@@ -1414,6 +997,77 @@ app.post('/api/profile/me/favorites', async (req, res) => {
   } catch (error) {
     console.error('Favorites error:', error)
     res.status(500).json({ error: 'Failed to update favorites' })
+  }
+})
+
+app.post('/api/anime/:id/activity', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { action } = req.body
+    const animeId = parseInt(req.params.id)
+    
+    if (!action) {
+      return res.status(400).json({ error: 'Action required' })
+    }
+    
+    let user = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
+    const currentUser = user.rows[0]
+    
+    let history = currentUser.history || []
+    let animeLists = currentUser.anime_lists || {}
+    
+    history.unshift({
+      animeId,
+      action,
+      viewedAt: new Date().toISOString()
+    })
+    
+    if (history.length > 50) {
+      history = history.slice(0, 50)
+    }
+    
+    if (!animeLists.watching) animeLists.watching = []
+    if (!animeLists.planned) animeLists.planned = []
+    if (!animeLists.completed) animeLists.completed = []
+    if (!animeLists.onHold) animeLists.onHold = []
+    if (!animeLists.dropped) animeLists.dropped = []
+    
+    const allLists = ['watching', 'planned', 'completed', 'onHold', 'dropped']
+    allLists.forEach(list => {
+      animeLists[list] = animeLists[list].filter(id => id !== animeId)
+    })
+    
+    const listMap = {
+      'watching': 'watching',
+      'completed': 'completed',
+      'planned': 'planned',
+      'dropped': 'dropped',
+      'on_hold': 'onHold'
+    }
+    
+    const targetList = listMap[action]
+    if (targetList && !animeLists[targetList].includes(animeId)) {
+      animeLists[targetList].push(animeId)
+    }
+    
+    await pool.query(
+      'UPDATE users SET history = $1, anime_lists = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+      [JSON.stringify(history), JSON.stringify(animeLists), decoded.id]
+    )
+    
+    res.json({
+      success: true,
+      history,
+      animeLists
+    })
+  } catch (error) {
+    console.error('Activity error:', error)
+    res.status(500).json({ error: 'Failed to update activity' })
   }
 })
 
