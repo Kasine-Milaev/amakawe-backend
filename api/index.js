@@ -961,7 +961,7 @@ app.put('/api/profile/me', async (req, res) => {
   }
 })
 
-app.post('/api/profile/me/favorites', async (req, res) => {
+app.get('/api/profile/me/favorites', async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
     return res.status(401).json({ error: 'No token provided' })
@@ -969,34 +969,15 @@ app.post('/api/profile/me/favorites', async (req, res) => {
   
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    const { animeId } = req.body
-    
-    if (!animeId) {
-      return res.status(400).json({ error: 'animeId required' })
-    }
-    
     const user = await pool.query('SELECT favorites FROM users WHERE id = $1', [decoded.id])
-    let favorites = user.rows[0].favorites || []
-    
-    const index = favorites.indexOf(animeId)
-    if (index > -1) {
-      favorites.splice(index, 1)
-    } else {
-      favorites.push(animeId)
-    }
-    
-    await pool.query(
-      'UPDATE users SET favorites = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [favorites, decoded.id]
-    )
     
     res.json({
       success: true,
-      favorites
+      favorites: user.rows[0].favorites || []
     })
   } catch (error) {
-    console.error('Favorites error:', error)
-    res.status(500).json({ error: 'Failed to update favorites' })
+    console.error('Get favorites error:', error)
+    res.status(500).json({ error: 'Failed to get favorites' })
   }
 })
 
