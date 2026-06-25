@@ -621,50 +621,103 @@ app.get('/', (req, res) => {
   res.json({ message: 'Amakawe Backend API is running' })
 })
 
-// ==================== PROFILE ROUTES - CORRECT ORDER ====================
-
-// 1. SPECIFIC ROUTES FIRST (/api/profile/me)
-app.get('/api/profile/me', async (req, res) => {
+app.put('/api/profile/me', async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) {
     return res.status(401).json({ error: 'No token provided' })
   }
+  
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    const result = await pool.query(
-      'SELECT * FROM users WHERE id = $1',
-      [decoded.id]
-    )
-    const user = result.rows[0]
-    if (!user) {
+    const { username, bio, avatar, banner, email, password } = req.body
+    
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
+    const currentUser = userResult.rows[0]
+    
+    if (!currentUser) {
       return res.status(404).json({ error: 'User not found' })
     }
+    
+    const updates = []
+    const values = []
+    let paramCount = 1
+    
+    if (username !== undefined) {
+      if (username.length < 3) {
+        return res.status(400).json({ error: 'Username must be at least 3 characters' })
+      }
+      updates.push(`username = $${paramCount}`)
+      values.push(username)
+      paramCount++
+    }
+    
+    if (bio !== undefined) {
+      updates.push(`bio = $${paramCount}`)
+      values.push(bio)
+      paramCount++
+    }
+    
+    if (avatar !== undefined) {
+      updates.push(`avatar = $${paramCount}`)
+      values.push(avatar)
+      paramCount++
+    }
+    
+    if (banner !== undefined) {
+      updates.push(`banner = $${paramCount}`)
+      values.push(banner)
+      paramCount++
+    }
+    
+    if (email !== undefined) {
+      if (email && !email.includes('@')) {
+        return res.status(400).json({ error: 'Invalid email' })
+      }
+      updates.push(`email = $${paramCount}`)
+      values.push(email || null)
+      paramCount++
+    }
+    
+    if (password !== undefined) {
+      if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' })
+      }
+      const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
+      updates.push(`password_hash = $${paramCount}`)
+      values.push(passwordHash)
+      paramCount++
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' })
+    }
+    
+    updates.push(`updated_at = CURRENT_TIMESTAMP`)
+    values.push(decoded.id)
+    
+    const result = await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+      values
+    )
+    
+    const user = result.rows[0]
+    
     res.json({
       success: true,
       user: {
         id: user.id,
-        provider: user.provider,
         username: user.username,
         email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        photo_url: user.photo_url,
+        bio: user.bio,
         avatar: user.avatar,
         banner: user.banner,
-        bio: user.bio,
         rating: user.rating,
-        anime_count: user.anime_count,
-        comments_count: user.comments_count,
-        favorites: user.favorites,
-        history: user.history,
-        anime_lists: user.anime_lists,
-        created_at: user.created_at,
-        last_login: user.last_login
+        anime_count: user.anime_count
       }
     })
   } catch (error) {
-    console.error('Profile/me error:', error)
-    res.status(500).json({ error: 'Failed to get profile' })
+    console.error('Profile update error:', error)
+    res.status(500).json({ error: 'Failed to update profile' })
   }
 })
 
@@ -742,6 +795,39 @@ app.post('/api/profile/me/activity', async (req, res) => {
   } catch (error) {
     console.error('Activity error:', error)
     res.status(500).json({ error: 'Failed to update activity' })
+  }
+})
+
+app.delete('/api/profile/me/delete', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    const { password } = req.body
+    
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id])
+    const user = userResult.rows[0]
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+    
+    if (user.password_hash) {
+      const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
+      if (user.password_hash !== passwordHash) {
+        return res.status(401).json({ error: 'Invalid password' })
+      }
+    }
+    
+    await pool.query('DELETE FROM users WHERE id = $1', [decoded.id])
+    
+    res.json({ success: true, message: 'Account deleted' })
+  } catch (error) {
+    console.error('Delete account error:', error)
+    res.status(500).json({ error: 'Failed to delete account' })
   }
 })
 
